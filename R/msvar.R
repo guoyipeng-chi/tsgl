@@ -306,17 +306,41 @@ specComputeTG <- function(dta, spans = NULL,
       xfft  <- mvfft(x)
 
       xfft  <- mvfft(x) ## Convert to Fourier
-      pgram = LongMemoryTS::Peri(x)
+      pgram <- NULL
+      if (requireNamespace("LongMemoryTS", quietly = TRUE)) {
+            print("[msvar] computing periodogram (LongMemoryTS::Peri)...")
+            pgram <- try(LongMemoryTS::Peri(x), silent = TRUE)
+      }
+      if (inherits(pgram, "try-error") || is.null(pgram) || length(dim(pgram)) != 3 ||
+          dim(pgram)[1] != ncol(x) || dim(pgram)[2] != ncol(x)) {
+            print("[msvar] computing periodogram (fallback)...")
+            p <- ncol(x)
+            pgram <- array(0, dim = c(p, p, Nspec))
+            pb <- txtProgressBar(min = 1, max = Nspec, style = 3)
+            for (k in 1:Nspec) {
+                  fk <- xfft[k, ]
+                  pgram[,,k] <- (fk %o% Conj(fk)) / (2 * pi * N)
+                  setTxtProgressBar(pb, k)
+            }
+            close(pb)
+      }
       kernel <- kernel("modified.daniell",halfWindowLength)
 
       if (!is.null(kernel)){
+            print("[msvar] smoothing periodogram with kernel...")
+            pb2 <- txtProgressBar(min = 1, max = ncol(x) * ncol(x), style = 3)
+            idx <- 0
             for (i in 1L:ncol(x)){
                   for (j in 1L:ncol(x)){
                         pgram[i, j, ] <- kernapply(pgram[i, j, ], kernel, circular = TRUE)
+                        idx <- idx + 1
+                        setTxtProgressBar(pb2, idx)
                   }
             }
+            close(pb2)
             df        <- df.kernel(kernel)
             bandwidth <- bandwidth.kernel(kernel)
+            print("[msvar] smoothing done")
       }
       if (is.null(kernel)){
             df        <- 2
@@ -334,6 +358,7 @@ specComputeTG <- function(dta, spans = NULL,
                   pgram[,,k] <- pgram[,,k] + upweight * A
             }
       }
+      print("[msvar] periodogram ready")
       fxx = pgram
       rm(pgram)
       #    gmodel = ADMM_LASSO_TimeSeries(S= fxx, lambda=lambda, rho = rho, alpha = alpha, MAX_ITER = ADMM_ITER,
@@ -1174,6 +1199,7 @@ msvar = function(dta,
                  fdr.q = 0.1,
                  pen.method = c("relax", "strict"),
                  thresh=0.005,...){
+      print("[msvar] entered")
       K          = ncol(dta)
       mean.vec   = matrix(apply(dta,2,mean),nrow=1)
       dta.demean = as.matrix(dta - matrix(1,nrow=nrow(dta),ncol=1) %*%
@@ -1257,12 +1283,15 @@ msvar = function(dta,
                   temp = temp[1,]
             }
             p.stage1    = p.seq[temp[1]]
+            print("[msvar] stage1: start sparseVARTG")
             sVAR.stage1.result = sparseVARTG(dta=dta.std,p=p.stage1,p.ub=p.ub,d=d,
                                              sigPairs=sigPairs,Sigma.given=Sigma.given,
                                              startValue=startValueMethod,
                                              forceAutoRegression=forceAutoRegression,
+                                             showStatus=stage1.showStatus,
                                              iteMax=iteMax,reltol=reltol,computeOneStepMSE=FALSE,
                                              computeAsyVar=TRUE)
+            print("[msvar] stage1: finished sparseVARTG")
             sVAR.stage1.result$negLogLike.matr = negLogLike.matr
             sVAR.stage1.result$aic.matr        = aic.matr
             sVAR.stage1.result$bic.matr        = bic.matr
@@ -1272,14 +1301,17 @@ msvar = function(dta,
 
       if(!is.null(nonZeroAR)){
             p.stage1    = floor(ncol(nonZeroAR)/nrow(nonZeroAR))
+            print("[msvar] stage1: start sparseVARTG (nonZeroAR)")
             sVAR.stage1.result = sparseVARTG(dta=dta.std,p=p.stage1,
                                              p.ub=p.ub,d=d,
                                              nonZeroAR=nonZeroAR,
                                              Sigma.given=Sigma.given,
                                              startValue=startValueMethod,
                                              forceAutoRegression=forceAutoRegression,
+                                             showStatus=stage1.showStatus,
                                              iteMax=iteMax,reltol=reltol,
                                              computeOneStepMSE=FALSE,computeAsyVar=TRUE)
+            print("[msvar] stage1: finished sparseVARTG (nonZeroAR)")
             sVAR.stage1.result$negLogLike.matr = NULL
             sVAR.stage1.result$aic.matr        = NULL
             sVAR.stage1.result$bic.matr        = NULL
@@ -1289,6 +1321,7 @@ msvar = function(dta,
 
       sVAR.stage2.result = NULL
       if(p.stage1>0){
+            print("[msvar] stage2: start sparseVARTG.2ndStage")
             if(stage2.showStatus){
                   print(" stage 2 refining... ")
             }
@@ -1300,6 +1333,7 @@ msvar = function(dta,
                                                       showStatus=stage2.showStatus,
                                                       iteMax=iteMax,reltol=reltol,
                                                       computeAsyVar=TRUE)
+            print("[msvar] stage2: finished sparseVARTG.2ndStage")
 
 
             sVAR.stage1.result$residual      = sVAR.stage1.result$residual %*% D.inv
