@@ -254,7 +254,10 @@ specComputeTG <- function(dta, spans = NULL,
                           fast = TRUE, demean = FALSE,
                           detrend = TRUE, plot = FALSE,
                           ABSTOL = 1e-6, RELTOL = 1e-4,
-                          upweight = NULL, na.action = na.fail,...){
+                          upweight = NULL, na.action = na.fail,
+                          checkpoint_dir = NULL,
+                          ...){
+      print("[specComputeTG] start")
       if(ncol(dta)<=2){
             stop("The series must be of at least 3 dimensions")
       }
@@ -307,6 +310,18 @@ specComputeTG <- function(dta, spans = NULL,
 
       xfft  <- mvfft(x) ## Convert to Fourier
       pgram <- NULL
+      cache_file <- NULL
+      if (!is.null(checkpoint_dir)) {
+            dir.create(checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
+            cache_file <- file.path(
+                  checkpoint_dir,
+                  paste0("pgram_", nrow(x), "x", ncol(x), "_hw", halfWindowLength, ".rds")
+            )
+            if (file.exists(cache_file)) {
+                  print(paste("[msvar] loading periodogram cache:", cache_file))
+                  pgram <- try(readRDS(cache_file), silent = TRUE)
+            }
+      }
       if (requireNamespace("LongMemoryTS", quietly = TRUE)) {
             print("[msvar] computing periodogram (LongMemoryTS::Peri)...")
             pgram <- try(LongMemoryTS::Peri(x), silent = TRUE)
@@ -323,6 +338,10 @@ specComputeTG <- function(dta, spans = NULL,
                   setTxtProgressBar(pb, k)
             }
             close(pb)
+      }
+      if (!is.null(cache_file) && !inherits(pgram, "try-error") && !is.null(pgram)) {
+            try(saveRDS(pgram, cache_file), silent = TRUE)
+            print(paste("[msvar] saved periodogram cache:", cache_file))
       }
       kernel <- kernel("modified.daniell",halfWindowLength)
 
@@ -359,6 +378,7 @@ specComputeTG <- function(dta, spans = NULL,
             }
       }
       print("[msvar] periodogram ready")
+      print("[specComputeTG] end")
       fxx = pgram
       rm(pgram)
       #    gmodel = ADMM_LASSO_TimeSeries(S= fxx, lambda=lambda, rho = rho, alpha = alpha, MAX_ITER = ADMM_ITER,
@@ -650,7 +670,11 @@ findSigPairsTG = function(dta,permuteNumber=NULL,forceAutoRegression=TRUE,
                           taper=0.1, pad=0, fast=TRUE,demean=TRUE,
                           detrend=FALSE,plot=FALSE,
                           upweight=NULL,na.action =na.fail,
-                          rho.flex = FALSE, ...){  #permuteBy=c("all","temporal"),showPermuteNumber=FALSE,rankPairsBy=c("testStat","pValue")
+                          rho.flex = FALSE,
+                          checkpoint_dir = NULL,
+                          ...){  #permuteBy=c("all","temporal"),showPermuteNumber=FALSE,rankPairsBy=c("testStat","pValue")
+
+      print("[findSigPairsTG] start")
 
       if(is.null(kernel)) {kernel = kernel("modified.daniell",halfWindowLength)}  ## RKim: revised
       if(is.null(halfWindowLength)) {halfWindowLength = kernel$m}
@@ -660,21 +684,27 @@ findSigPairsTG = function(dta,permuteNumber=NULL,forceAutoRegression=TRUE,
                                    taper = taper, pad = pad, fast = fast,
                                    demean = demean, detrend= detrend, plot = plot,
                                    upweight = upweight, na.action = na.action,
-                                   halfWindowLength = halfWindowLength, ...) ## halfWindowlength added 11/19/2020
+                                   halfWindowLength = halfWindowLength,
+                                   checkpoint_dir = checkpoint_dir,
+                                   ...) ## halfWindowlength added 11/19/2020
       specfreq     = spec.temp$freq
       nser <- ncol(dta)
       gpresmry = spec.temp$gpresmry                                  ## RKim: added from here
       gpre.max           = matrix(NA, nrow=nser*(nser-1)/2,ncol=3)
       colnames(gpre.max) = c("from","to","supPre")
       rowpos               = 0
+      pb_pairs <- txtProgressBar(min = 1, max = nser*(nser-1)/2, style = 3)
       for (i in 1:(nser-1)){
             for (j in (i+1):nser){
                   rowpos                 = rowpos + 1
                   k                      = i+(j-1)*(j-2)/2
                   gpre.max[rowpos,1:2] = c(i,j)
                   gpre.max[rowpos,3]   = max(abs(gpresmry[,k]))
+                  setTxtProgressBar(pb_pairs, rowpos)
             }
       }
+      close(pb_pairs)
+      print("[findSigPairsTG] end")
       gpre.maxsort <- gpre.max[which(gpre.max[,3]>0),]  #gpre.max[order(gpre.max[,3], decreasing=TRUE),]  ## RKim: to here
 
       result = list(dta=dta,forceAutoRegression=forceAutoRegression,
@@ -1198,7 +1228,9 @@ msvar = function(dta,
                  rho.flex = FALSE,
                  fdr.q = 0.1,
                  pen.method = c("relax", "strict"),
-                 thresh=0.005,...){
+                 thresh=0.005,
+                 checkpoint_dir=NULL,
+                 ...){
       print("[msvar] entered")
       K          = ncol(dta)
       mean.vec   = matrix(apply(dta,2,mean),nrow=1)
@@ -1236,6 +1268,7 @@ msvar = function(dta,
                   if(is.null(halfWindowLength)){
                         halfWindowLength = floor(sqrt(nrow(dta)))
                   }
+                  print("[msvar] stage0: findSigPairsTG start")
                   sigPairsResult    = findSigPairsTG(dta=dta.std, pen.method = pen.method,
                                                      kernel=kernel("modified.daniell",
                                                                    halfWindowLength),
@@ -1245,8 +1278,10 @@ msvar = function(dta,
                                                      detrend=FALSE,
                                                      ADMM_ITER=ADMM_ITER,
                                                      lambda= lambda,
-                                                     rho=rho,alpha=alpha,thresh=thresh
+                                                     rho=rho,alpha=alpha,thresh=thresh,
+                                                     checkpoint_dir=checkpoint_dir
                   ) #  permuteBy=stage1.permuteBy,rankPairsBy=stage1.rankPairsBy,permuteNumber=stage1.permuteNumber,showPermuteNumber=stage1.showPermuteNumber
+                  print("[msvar] stage0: findSigPairsTG end")
                   if (dim(sigPairsResult$gpre.max)[2] <= 1)
                   {
                         allPairs = matrix(c(1,1), 1, 2)

@@ -532,6 +532,7 @@ mysdf <- function(dta, halfWindowLength, smooth = FALSE, demean= TRUE) {
             stop("halfWindowLength is too large")
       }
 
+      pb_mysdf <- txtProgressBar(min = 1, max = M, style = 3)
       for(f in 1 : M)
       {
             d_freq = (f - 1) * K + halfWindowLength + 1  + (
@@ -553,7 +554,9 @@ mysdf <- function(dta, halfWindowLength, smooth = FALSE, demean= TRUE) {
                   }
 
             }
+            setTxtProgressBar(pb_mysdf, f)
       }
+      close(pb_mysdf)
       return(S)
 
 }
